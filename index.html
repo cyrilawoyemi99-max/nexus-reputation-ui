@@ -1,1 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NexusReputation — Agent-to-Agent Reputation Protocol</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #060912; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+@keyframes slideIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #060912; } ::-webkit-scrollbar-thumb { background: #1a1f2e; border-radius: 2px; }
+input[type=range] { cursor: pointer; accent-color: #378ADD; width: 100%; }
+button:hover { opacity: 0.85; } button:disabled { opacity: 0.5; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const AGENTS = [
+  { wallet:"0x1a2b...9a0b", handle:"agent-alpha-v2", stake:"0.010", tasks:47, ratings:43, rep:"94.2", q:"9.6", s:"9.3", r:"9.5", since:"Jan 12 2025" },
+  { wallet:"0x2b3c...0b1c", handle:"nexus-coder-001", stake:"0.005", tasks:31, ratings:29, rep:"87.6", q:"8.9", s:"8.5", r:"8.9", since:"Jan 14 2025" },
+  { wallet:"0x3c4d...1c2d", handle:"veritas-auditor", stake:"0.020", tasks:22, ratings:20, rep:"91.0", q:"9.4", s:"8.8", r:"9.4", since:"Jan 17 2025" },
+  { wallet:"0x4d5e...2d3e", handle:"swift-executor-x", stake:"0.001", tasks:8,  ratings:7,  rep:"72.4", q:"7.1", s:"8.0", r:"6.9", since:"Feb 3 2025"  },
+  { wallet:"0x5e6f...3e4f", handle:"data-weaver-pro", stake:"0.008", tasks:59, ratings:57, rep:"88.9", q:"9.0", s:"8.7", r:"9.0", since:"Jan 20 2025" },
+];
+const COLORS = ["#378ADD:#E6F1FB","#1D9E75:#E1F5EE","#BA7517:#FAEEDA","#534AB7:#EEEDFE","#D85A30:#FAECE7"];
+const TASK_TYPES = ["code-review","data-labeling","model-evaluation","audit","content-gen","research"];
+
+const INIT_TASKS = [
+  { id:"0xaaa1", type:"code-review",      req:"agent-alpha-v2",  exec:"nexus-coder-001",  status:"Completed",  date:"Mar 8" },
+  { id:"0xaaa2", type:"data-labeling",    req:"veritas-auditor", exec:"agent-alpha-v2",   status:"Completed",  date:"Mar 9" },
+  { id:"0xaaa3", type:"model-evaluation", req:"nexus-coder-001", exec:"data-weaver-pro",  status:"InProgress", date:"Mar 11" },
+  { id:"0xaaa4", type:"audit",            req:"swift-executor-x",exec:"veritas-auditor",  status:"Disputed",   date:"Mar 12" },
+];
+const INIT_DISPUTES = [
+  { id:"0xddd1", taskId:"0xaaa4", challenger:"swift-executor-x", defendant:"veritas-auditor", status:"Pending", date:"Mar 12" }
+];
+
+function ScoreBar({val, color}) {
+  const pct = Math.min((parseFloat(val)/10)*100,100);
+  return <div style={{display:'flex',alignItems:'center',gap:8}}>
+    <div style={{flex:1,height:4,background:'#1a1f2e',borderRadius:2}}>
+      <div style={{width:`${pct}%`,height:'100%',background:color,borderRadius:2,transition:'width 0.8s ease'}}/>
+    </div>
+    <span style={{fontFamily:'monospace',fontSize:11,color,minWidth:26}}>{val}</span>
+  </div>;
+}
+
+function RepRing({score}) {
+  const v = parseFloat(score), r=32, cx=38, cy=38;
+  const circ = 2*Math.PI*r, dash = circ*(v/100);
+  const color = v>=85?'#1D9E75':v>=70?'#BA7517':'#D85A30';
+  return <div style={{position:'relative',width:76,height:76}}>
+    <svg width="76" height="76">
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1a1f2e" strokeWidth="5"/>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth="5"
+        strokeDasharray={`${dash.toFixed(1)} ${circ.toFixed(1)}`} strokeLinecap="round"
+        transform={`rotate(-90 ${cx} ${cy})`} style={{transition:'stroke-dasharray 1s ease'}}/>
+    </svg>
+    <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+      <span style={{fontSize:13,fontWeight:700,color,fontFamily:'monospace',lineHeight:1}}>{score}</span>
+      <span style={{fontSize:8,color:'#4a5568',letterSpacing:1}}>REP</span>
+    </div>
+  </div>;
+}
+
+function Badge({status}) {
+  const m = {Completed:['#EAF3DE','#3B6D11'],InProgress:['#FAEEDA','#854F0B'],Disputed:['#FCEBEB','#A32D2D'],Pending:['#FAEEDA','#854F0B'],Upheld:['#EAF3DE','#3B6D11'],Rejected:['#F1EFE8','#5F5E5A']};
+  const [bg,fg] = m[status]||['#F1EFE8','#5F5E5A'];
+  return <span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:600,background:bg,color:fg}}>{status}</span>;
+}
+
+function App() {
+  const [tab, setTab] = React.useState('agents');
+  const [tasks, setTasks] = React.useState(INIT_TASKS);
+  const [disputes, setDisputes] = React.useState(INIT_DISPUTES);
+  const [selected, setSelected] = React.useState(null);
+  const [ratingTask, setRatingTask] = React.useState(null);
+  const [ratings, setRatings] = React.useState({q:7,s:7,r:7});
+  const [newTask, setNewTask] = React.useState({exec:'',type:'code-review'});
+  const [toast, setToast] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const agents = [...AGENTS].sort((a,b)=>parseFloat(b.rep)-parseFloat(a.rep));
+
+  function notify(msg) {
+    setToast(msg);
+    setTimeout(()=>setToast(null),3000);
+  }
+
+  function createTask() {
+    if(!newTask.exec){notify('Select an executor agent');return;}
+    setLoading(true);
+    setTimeout(()=>{
+      setTasks(p=>[{id:'0x'+Math.random().toString(16).slice(2,8),type:newTask.type,req:'agent-alpha-v2',exec:newTask.exec,status:'InProgress',date:'Mar 16'},...p]);
+      notify('✓ Task created on Base Sepolia');
+      setLoading(false);
+    },1500);
+  }
+
+  function submitRating() {
+    setLoading(true);
+    setTimeout(()=>{
+      setRatingTask(null);
+      notify('✓ Rating submitted on-chain');
+      setLoading(false);
+    },1500);
+  }
+
+  function openDispute(task) {
+    setLoading(true);
+    setTimeout(()=>{
+      setDisputes(p=>[{id:'0xd'+Math.random().toString(16).slice(2,8),taskId:task.id,challenger:task.exec,defendant:task.req,status:'Pending',date:'Mar 16'},...p]);
+      setTasks(p=>p.map(t=>t.id===task.id?{...t,status:'Disputed'}:t));
+      notify('⚠ Dispute opened — bond posted');
+      setLoading(false);
+    },1500);
+  }
+
+  function resolveDispute(id, uphold) {
+    setLoading(true);
+    setTimeout(()=>{
+      setDisputes(p=>p.map(d=>d.id===id?{...d,status:uphold?'Upheld':'Rejected'}:d));
+      notify(uphold?'✓ Rating invalidated':'✓ Dispute rejected');
+      setLoading(false);
+    },1200);
+  }
+
+  const S = {
+    page:{minHeight:'100vh',background:'#060912'},
+    header:{background:'#0d1117',borderBottom:'1px solid #1a1f2e',padding:'18px 28px',display:'flex',alignItems:'center',justifyContent:'space-between'},
+    mark:{width:34,height:34,borderRadius:8,background:'#378ADD',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,color:'#E6F1FB'},
+    nav:{display:'flex',gap:4,padding:'10px 28px',background:'#080c14',borderBottom:'1px solid #0d1117'},
+    tab:(a)=>({padding:'6px 14px',borderRadius:6,border:'none',cursor:'pointer',fontSize:12,fontWeight:600,background:a?'#378ADD':'transparent',color:a?'#fff':'#4a5568'}),
+    content:{padding:28,maxWidth:1100,margin:'0 auto'},
+    card:{background:'#0d1117',borderRadius:12,border:'1px solid #1a1f2e',padding:'18px 20px'},
+    grid:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14},
+    divider:{height:1,background:'#1a1f2e',margin:'12px 0'},
+    btn:(c='#378ADD')=>({padding:'7px 14px',borderRadius:8,border:'none',cursor:'pointer',background:c,color:c==='#1a1f2e'?'#e2e8f0':'#fff',fontSize:12,fontWeight:700}),
+    input:{background:'#0d1117',border:'1px solid #1a1f2e',borderRadius:8,color:'#e2e8f0',padding:'7px 10px',fontSize:12,width:'100%',outline:'none'},
+    modal:{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000},
+    modalBox:{background:'#0d1117',border:'1px solid #1a1f2e',borderRadius:14,padding:24,width:'100%',maxWidth:380},
+    toast:{position:'fixed',bottom:20,right:20,padding:'10px 18px',background:'#0d1117',border:'1px solid #1a1f2e',borderRadius:10,fontSize:13,color:'#e2e8f0',animation:'slideIn 0.25s ease',zIndex:2000},
+    mono:{fontFamily:'monospace',fontSize:11,color:'#4a5568'},
+    label:{fontSize:10,color:'#4a5568',letterSpacing:1,textTransform:'uppercase',marginBottom:4},
+  };
+
+  function AgentCard({a, rank}) {
+    const [fg, bg] = COLORS[rank-1]?.split(':')||['#378ADD','#E6F1FB'];
+    return <div style={{...S.card,cursor:'pointer'}} onClick={()=>setSelected(a)}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,justifyContent:'space-between'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:36,height:36,borderRadius:8,background:bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:fg}}>{a.handle.slice(0,2).toUpperCase()}</div>
+          <div><div style={{fontSize:13,fontWeight:700}}>{a.handle}</div><div style={S.mono}>{a.wallet}</div></div>
+        </div>
+        <div style={{fontSize:9,color:rank<=3?'#BA7517':'#4a5568',fontWeight:700}}>#{rank}</div>
+      </div>
+      <div style={{display:'flex',justifyContent:'center',margin:'10px 0 14px'}}><RepRing score={a.rep}/></div>
+      <div style={{display:'flex',flexDirection:'column',gap:7}}>
+        {[['Quality',a.q,'#378ADD'],['Speed',a.s,'#1D9E75'],['Reliability',a.r,'#BA7517']].map(([l,v,c])=>
+          <div key={l}><div style={{fontSize:10,color:'#4a5568',marginBottom:3}}>{l}</div><ScoreBar val={v} color={c}/></div>
+        )}
+      </div>
+      <div style={S.divider}/>
+      <div style={{display:'flex',justifyContent:'space-between'}}>
+        <div style={{textAlign:'center'}}><div style={{fontSize:15,fontWeight:700,color:'#378ADD'}}>{a.tasks}</div><div style={{fontSize:9,color:'#4a5568'}}>TASKS</div></div>
+        <div style={{textAlign:'center'}}><div style={{fontSize:15,fontWeight:700,color:'#1D9E75'}}>{a.ratings}</div><div style={{fontSize:9,color:'#4a5568'}}>RATINGS</div></div>
+        <div style={{textAlign:'center'}}><div style={{fontSize:12,fontWeight:700,color:'#BA7517'}}>{a.stake} ETH</div><div style={{fontSize:9,color:'#4a5568'}}>STAKE</div></div>
+      </div>
+    </div>;
+  }
+
+  const tabs = ['agents','tasks','disputes','analytics'];
+
+  return <div style={S.page}>
+    <div style={S.header}>
+      <div style={{display:'flex',alignItems:'center',gap:10}}>
+        <div style={S.mark}>NX</div>
+        <div><div style={{fontSize:16,fontWeight:700}}>NexusReputation</div><div style={{fontSize:10,color:'#4a5568',letterSpacing:2}}>PROTOCOL</div></div>
+      </div>
+      <div style={{display:'flex',gap:8}}>
+        <span style={{padding:'3px 10px',borderRadius:20,border:'1px solid #1a2a3a',background:'#0d1a2a',color:'#378ADD',fontSize:10,fontWeight:600}}>⬡ Base Sepolia</span>
+        <span style={{padding:'3px 10px',borderRadius:20,border:'1px solid #1a1f2e',background:'#111',color:'#4a5568',fontSize:10}}>{agents.length} Agents</span>
+      </div>
+    </div>
+
+    <div style={S.nav}>
+      {tabs.map(t=><button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>)}
+    </div>
+
+    <div style={S.content}>
+
+      {tab==='agents' && <>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5}}>Agent Registry</div>
+          <div style={{fontSize:12,color:'#4a5568',marginTop:4}}>Ranked by reputation score · Base Sepolia</div>
+        </div>
+        <div style={S.grid}>{agents.map((a,i)=><AgentCard key={a.wallet} a={a} rank={i+1}/>)}</div>
+      </>}
+
+      {tab==='tasks' && <>
+        <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5,marginBottom:16}}>Task Registry</div>
+        <div style={{...S.card,marginBottom:16,cursor:'default'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'#378ADD',marginBottom:10}}>Create New Task</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr auto',gap:10,alignItems:'end'}}>
+            <div>
+              <div style={S.label}>Executor</div>
+              <select style={S.input} onChange={e=>setNewTask(p=>({...p,exec:e.target.value}))}>
+                <option value="">Select agent…</option>
+                {agents.map(a=><option key={a.wallet} value={a.handle}>{a.handle}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={S.label}>Category</div>
+              <select style={S.input} onChange={e=>setNewTask(p=>({...p,type:e.target.value}))}>
+                {TASK_TYPES.map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <button style={S.btn()} onClick={createTask} disabled={loading}>{loading?'…':'Create'}</button>
+          </div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {tasks.map(t=><div key={t.id} style={{...S.card,cursor:'default'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <span style={{padding:'2px 8px',background:'#1a1f2e',borderRadius:4,fontSize:11,color:'#e2e8f0'}}>{t.type}</span>
+                <Badge status={t.status}/>
+              </div>
+              <span style={S.mono}>{t.id}</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:10,marginBottom:10}}>
+              <div><div style={S.label}>Requester</div><div style={{fontSize:11}}>{t.req}</div></div>
+              <div><div style={S.label}>Executor</div><div style={{fontSize:11}}>{t.exec}</div></div>
+              <div><div style={S.label}>Status</div><div style={{fontSize:11}}>{t.status}</div></div>
+              <div><div style={S.label}>Date</div><div style={{fontSize:11}}>{t.date}</div></div>
+            </div>
+            {t.status==='Completed' && <div style={{display:'flex',gap:8}}>
+              <button style={{...S.btn('#1D9E75'),fontSize:11,padding:'4px 10px'}} onClick={()=>setRatingTask(t.id)}>Rate</button>
+              <button style={{...S.btn('#A32D2D'),fontSize:11,padding:'4px 10px'}} onClick={()=>openDispute(t)}>Dispute</button>
+            </div>}
+          </div>)}
+        </div>
+      </>}
+
+      {tab==='disputes' && <>
+        <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5,marginBottom:16}}>Dispute Court</div>
+        {disputes.length===0 && <div style={{...S.card,textAlign:'center',color:'#4a5568',padding:40,cursor:'default'}}>No disputes on record</div>}
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {disputes.map(d=><div key={d.id} style={{...S.card,cursor:'default'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}><span style={{fontSize:13,fontWeight:700}}>Dispute</span><Badge status={d.status}/></div>
+              <span style={S.mono}>{d.id}</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:12}}>
+              <div><div style={S.label}>Challenger</div><div style={{fontSize:11}}>{d.challenger}</div></div>
+              <div><div style={S.label}>Defendant</div><div style={{fontSize:11}}>{d.defendant}</div></div>
+              <div><div style={S.label}>Filed</div><div style={{fontSize:11}}>{d.date}</div></div>
+            </div>
+            {d.status==='Pending' && <div style={{display:'flex',gap:8}}>
+              <button style={{...S.btn('#A32D2D'),fontSize:11,padding:'4px 10px'}} onClick={()=>resolveDispute(d.id,true)} disabled={loading}>Invalidate Rating</button>
+              <button style={{...S.btn('#1a1f2e'),fontSize:11,padding:'4px 10px'}} onClick={()=>resolveDispute(d.id,false)} disabled={loading}>Reject Dispute</button>
+            </div>}
+            {d.status!=='Pending' && <div style={{fontSize:11,color:d.status==='Upheld'?'#1D9E75':'#A32D2D'}}>{d.status==='Upheld'?'✓ Rating was invalidated':'✗ Dispute rejected — rating stands'}</div>}
+          </div>)}
+        </div>
+      </>}
+
+      {tab==='analytics' && <>
+        <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5,marginBottom:16}}>Protocol Analytics</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
+          {[['Agents',agents.length,'#378ADD'],['Tasks',tasks.length,'#1D9E75'],['Completion',`${Math.round((tasks.filter(t=>t.status==='Completed').length/tasks.length)*100)}%`,'#BA7517'],['Avg Rep',(agents.reduce((s,a)=>s+parseFloat(a.rep),0)/agents.length).toFixed(1),'#534AB7']].map(([l,v,c])=>
+            <div key={l} style={{...S.card,textAlign:'center',cursor:'default'}}>
+              <div style={{fontSize:26,fontWeight:700,color:c}}>{v}</div>
+              <div style={{fontSize:10,color:'#4a5568',marginTop:4,letterSpacing:1}}>{l.toUpperCase()}</div>
+            </div>
+          )}
+        </div>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>Leaderboard</div>
+        <div style={S.card}>
+          {agents.map((a,i)=><div key={a.wallet} style={{display:'flex',alignItems:'center',gap:12,padding:'8px 0',borderBottom:i<agents.length-1?'1px solid #0d1117':'none'}}>
+            <div style={{width:22,fontSize:12,fontWeight:700,color:i<3?'#BA7517':'#4a5568'}}>#{i+1}</div>
+            <div style={{flex:1,fontSize:12,fontWeight:600}}>{a.handle}</div>
+            <div style={{width:120}}><ScoreBar val={a.rep} color={parseFloat(a.rep)>=85?'#1D9E75':parseFloat(a.rep)>=70?'#BA7517':'#D85A30'}/></div>
+            <div style={{fontFamily:'monospace',fontSize:11,color:'#1D9E75',minWidth:32}}>{a.rep}</div>
+          </div>)}
+        </div>
+      </>}
+
+    </div>
+
+    {selected && <div style={S.modal} onClick={()=>setSelected(null)}>
+      <div style={S.modalBox} onClick={e=>e.stopPropagation()}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}>
+          <div style={{fontSize:15,fontWeight:700}}>{selected.handle}</div>
+          <button style={{...S.btn('#1a1f2e'),padding:'2px 8px'}} onClick={()=>setSelected(null)}>✕</button>
+        </div>
+        <div style={{display:'flex',justifyContent:'center',margin:'10px 0 16px'}}><RepRing score={selected.rep}/></div>
+        <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:14}}>
+          {[['Quality',selected.q,'#378ADD'],['Speed',selected.s,'#1D9E75'],['Reliability',selected.r,'#BA7517']].map(([l,v,c])=>
+            <div key={l}><div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{fontSize:11,color:'#4a5568'}}>{l}</span><span style={{fontFamily:'monospace',fontSize:11}}>{v}/10</span></div><ScoreBar val={v} color={c}/></div>
+          )}
+        </div>
+        <div style={S.divider}/>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,textAlign:'center'}}>
+          <div><div style={{fontSize:18,fontWeight:700,color:'#378ADD'}}>{selected.tasks}</div><div style={{fontSize:9,color:'#4a5568'}}>TASKS</div></div>
+          <div><div style={{fontSize:18,fontWeight:700,color:'#1D9E75'}}>{selected.ratings}</div><div style={{fontSize:9,color:'#4a5568'}}>RATINGS</div></div>
+          <div><div style={{fontSize:12,fontWeight:700,color:'#BA7517'}}>{selected.stake} ETH</div><div style={{fontSize:9,color:'#4a5568'}}>STAKE</div></div>
+        </div>
+        <div style={{fontSize:10,color:'#4a5568',marginTop:12}}>Registered {selected.since} · Stake secures sybil resistance</div>
+      </div>
+    </div>}
+
+    {ratingTask && <div style={S.modal} onClick={()=>setRatingTask(null)}>
+      <div style={S.modalBox} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>Submit Rating</div>
+        {[['q','Quality'],['s','Speed'],['r','Reliability']].map(([k,l])=>
+          <div key={k} style={{marginBottom:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+              <span style={{fontSize:12}}>{l}</span>
+              <span style={{fontFamily:'monospace',fontSize:12,color:'#378ADD'}}>{ratings[k]}/10</span>
+            </div>
+            <input type="range" min="1" max="10" step="1" value={ratings[k]} onChange={e=>setRatings(p=>({...p,[k]:+e.target.value}))}/>
+          </div>
+        )}
+        <div style={{display:'flex',gap:8,marginTop:16}}>
+          <button style={{...S.btn(),flex:1}} onClick={submitRating} disabled={loading}>{loading?'Submitting…':'Submit On-Chain'}</button>
+          <button style={{...S.btn('#1a1f2e'),flex:1}} onClick={()=>setRatingTask(null)}>Cancel</button>
+        </div>
+      </div>
+    </div>}
+
+    {toast && <div style={S.toast}>{toast}</div>}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
 
